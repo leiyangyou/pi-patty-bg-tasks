@@ -202,10 +202,12 @@ async function attachAction(
     if (!job) throw new Error(`Job not found: ${jobId}`);
     const label = jobLabel(job);
 
-    const skipWait =
-        reg.pendingDecisionJobId === job.id && job.status === "running";
-
-    if (job.status === "running" && waitForCompletion && !skipWait) {
+    // [local patch] `reg.pendingDecisionJobId` is advisory: requestJobDecision's own
+    // docstring says the agent "is never interrupted to do so". Using it to skip the
+    // wait made `attach(wait:true)` return instantly for every timeout-backgrounded
+    // job — the most common kind. The wait block already suppresses the separate
+    // completion notice via `job.outputConsumed`, so waiting here stays consistent.
+    if (job.status === "running" && waitForCompletion) {
         ensureCompletionPromise(job);
         // We're actively following this job — suppress its separate completion
         // notice so the attach result is the single notification. Undone on the
@@ -256,6 +258,21 @@ async function attachAction(
                 details: undefined,
             };
         }
+    }
+
+    // [local patch] Guard the fall-through. Reaching here with status === "running"
+    // is normal (wait:false, or a job that outlived the awaited donePromise), but
+    // the message below asserted completion unconditionally — telling both the
+    // agent and the human that a still-running job had finished.
+    if (job.status === "running") {
+        return {
+            content: [
+                textBlock(
+                    `${label} is still running. Use jobs output to check on it, or jobs action='attach' with wait=true to wait for it to finish.`
+                ),
+            ],
+            details: undefined,
+        };
     }
 
     const message = `${label} finished. Status: ${job.status}`;
